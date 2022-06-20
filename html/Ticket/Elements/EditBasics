@@ -1,0 +1,201 @@
+%# BEGIN BPS TAGGED BLOCK {{{
+%#
+%# COPYRIGHT:
+%#
+%# This software is Copyright (c) 1996-2021 Best Practical Solutions, LLC
+%#                                          <sales@bestpractical.com>
+%#
+%# (Except where explicitly superseded by other copyright notices)
+%#
+%#
+%# LICENSE:
+%#
+%# This work is made available to you under the terms of Version 2 of
+%# the GNU General Public License. A copy of that license should have
+%# been provided with this software, but in any event can be snarfed
+%# from www.gnu.org.
+%#
+%# This work is distributed in the hope that it will be useful, but
+%# WITHOUT ANY WARRANTY; without even the implied warranty of
+%# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+%# General Public License for more details.
+%#
+%# You should have received a copy of the GNU General Public License
+%# along with this program; if not, write to the Free Software
+%# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+%# 02110-1301 or visit their web page on the internet at
+%# http://www.gnu.org/licenses/old-licenses/gpl-2.0.html.
+%#
+%#
+%# CONTRIBUTION SUBMISSION POLICY:
+%#
+%# (The following paragraph is not intended to limit the rights granted
+%# to you to modify and distribute this software under the terms of
+%# the GNU General Public License and is only of importance to you if
+%# you choose to contribute your changes and enhancements to the
+%# community by submitting them to Best Practical Solutions, LLC.)
+%#
+%# By intentionally submitting any modifications, corrections or
+%# derivatives to this work, or any other work intended for use with
+%# Request Tracker, to Best Practical Solutions, LLC, you confirm that
+%# you are the copyright holder for those contributions and you grant
+%# Best Practical Solutions,  LLC a nonexclusive, worldwide, irrevocable,
+%# royalty-free, perpetual, license to use, copy, create derivative
+%# works based on those contributions, and sublicense and distribute
+%# those contributions and any derivatives thereof.
+%#
+%# END BPS TAGGED BLOCK }}}
+<%ARGS>
+$TicketObj => undef
+$QueueObj => undef
+@fields => ()
+$InTable => 0
+%defaults => ()
+$ExcludeCustomRoles => 0
+$ExcludeOwner => 0
+</%ARGS>
+<%INIT>
+if ($TicketObj) {
+    $QueueObj ||= $TicketObj->QueueObj;
+}
+
+unless ( @fields ) {
+    my $subject = $defaults{'Subject'} || $TicketObj->Subject;
+    @fields = (
+        {   name => 'Subject',
+            html => '<input name="Subject" type="text" value="'.(defined($subject) ? $m->interp->apply_escapes( $subject, 'h' ) : '').'" class="form-control" />',
+        },
+        {   name => 'Status',
+            comp => '/Ticket/Elements/CustomSelectStatus',
+            args => {
+                Name => 'Status',
+                Default => $defaults{Status},
+                DefaultFromArgs => 0,
+                TicketObj => $TicketObj,
+            },
+        },
+        {   name => 'Queue',
+            comp => '/Elements/SelectQueue',
+            args => {
+                Name => 'Queue',
+                Default => $defaults{'Queue'} || $QueueObj->Id,
+                ShowNullOption => 0,
+            }
+        },
+        {   name => 'Owner',
+            comp => '/Elements/SelectOwner',
+            args => {
+                Name => 'Owner',
+                QueueObj => $QueueObj,
+                TicketObj => $TicketObj,
+                Default => $defaults{'Owner'} || $TicketObj->OwnerObj->Id,
+                DefaultValue => 0,
+            }
+        },
+
+        { special => 'roles' },
+
+        $QueueObj->SLADisabled ? () : (
+        {   name => 'SLA',
+            comp => '/Elements/SelectSLA',
+            args => {
+                Name => 'SLA',
+                Default => $defaults{SLA},
+                DefaultFromArgs => 0,
+                TicketObj => $TicketObj,
+            },
+        }),
+        # Time Estimated, Worked, and Left
+        (
+            map {
+                (my $field = $_) =~ s/ //g;
+                {
+                    name => $_,
+                    comp => '/Elements/EditTimeValue',
+                    args => {
+                        Name => $field,
+                        Default => $defaults{$field} || $TicketObj->$field,
+                    }
+                }
+            } ('Time Estimated', 'Time Worked', 'Time Left')
+        ),
+        # Priority and Final Priority
+        (
+            map {
+                (my $field = $_) =~ s/ //g;
+                {
+                    name => $_,
+                    comp => '/Elements/SelectPriority',
+                    args => {
+                        Name => $field,
+                        Default => $defaults{$field} || $TicketObj->$field,
+                        QueueObj => $TicketObj->QueueObj,
+                    }
+                }
+            } ('Priority', 'Final Priority')
+        ),
+    );
+}
+
+my @role_fields;
+
+unless ($ExcludeCustomRoles) {
+    my $roles = $QueueObj->CustomRoles;
+    $roles->LimitToSingleValue;
+
+    my @hidden = $QueueObj->HiddenCustomRoleIDsForURL;
+    $roles->Limit(FIELD => 'id', OPERATOR => 'NOT IN', VALUE => \@hidden) if @hidden;
+
+    $m->callback( CallbackName => 'ModifyCustomRoles', %ARGS, CustomRoles => $roles);
+    while (my $role = $roles->Next) {
+        push @role_fields, {
+            name => $role->Name,
+            hint => $role->EntryHint,
+            comp => '/Elements/SingleUserRoleInput',
+            args => {
+                role    => $role,
+                Ticket  => $TicketObj,
+                Default => $defaults{$role->GroupType},
+            }
+        };
+    }
+}
+
+if ($ExcludeOwner) {
+    @fields = grep { ($_->{name}||'') ne 'Owner' } @fields;
+}
+
+# inflate the marker for custom roles into the field specs for each one
+@fields = map { ($_->{special}||'') eq 'roles' ? @role_fields : $_ } @fields;
+
+$m->callback( CallbackName => 'MassageFields', %ARGS, TicketObj => $TicketObj, Fields => \@fields );
+
+# Process the field list, skipping if html is provided and running the
+# components otherwise
+for my $field (@fields) {
+    next if defined $field->{'html'};
+    if ( $field->{'comp'} ) {
+        $field->{'html'} = $m->scomp($field->{'comp'}, %{$field->{'args'} || {}});
+    }
+}
+</%INIT>
+
+% unless ($InTable) {
+<div>
+% }
+% for my $field (@fields) {
+%# Prefer input name as css class, e.g. "FinalPriority" instead of "Final_Priority"
+  <div class="form-row <% CSSClass( $field->{args}{Name} || $field->{'name'} ) %>">
+    <div class="label col-3"><% loc($field->{'name'}) %>:
+%   if ( my $hint = $field->{hint} ) {
+      <span class="far fa-question-circle icon-helper" data-toggle="tooltip" data-placement="top" data-original-title="<% $hint %>"></span>
+%   }
+    </div>
+    <div class="value col-9"><% $field->{'html'} |n %></div>
+  </div>
+% }
+% $m->callback( CallbackName => 'EndOfList', TicketObj => $TicketObj, %ARGS, Fields => \@fields );
+% unless ($InTable) {
+</div>
+% }
+
